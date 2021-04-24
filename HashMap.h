@@ -38,9 +38,9 @@ template<class Key, class = void> struct idHashFunction {
 		return (uint32)std::hash<Key>()(key);
 	}
 };
-//hash function for integers (and pointers)
+//hash function for integers
 template<class Key> struct idHashFunction<Key, std::enable_if_t<
-	(std::is_integral<Key>::value || std::is_pointer<Key>::value)
+	std::is_integral<Key>::value
 >> {
 	static const uint32 MULTIPLIER = 2654435769U;	//golden ratio * 2^32
 	ID_FORCE_INLINE uint32 operator()(Key key) const {
@@ -49,13 +49,21 @@ template<class Key> struct idHashFunction<Key, std::enable_if_t<
 		return MULTIPLIER * uint32(key);
 	}
 };
+//hash function for pointers --- same as for integers
+template<class Key> struct idHashFunction<Key, std::enable_if_t<
+	std::is_pointer<Key>::value
+>> {
+	ID_FORCE_INLINE uint32 operator()(Key key) const {
+		return idHashFunction<size_t>()(size_t(key));
+	}
+};
 //hash function for idStr (case-sensitive only)
 template<class Key> struct idHashFunction<Key, std::enable_if_t<
 	std::is_same<Key, idStr>::value
 >> {
 	uint32 operator()(const Key &key) const {
 		uint64 hash = idStr::HashPoly64(key.c_str());
-		return idHashFunction<uint64>(hash);
+		return idHashFunction<uint64>()(hash);
 	}
 };
 
@@ -63,9 +71,15 @@ template<class Key> struct idHashFunction<Key, std::enable_if_t<
 template<class Key, class = void> struct idHashDefaultEmpty {
 	static Key Get() { return Key(); }
 };
-//-1 (all bits set) is default "empty" value in idHashMap for integers and pointers
+//minimum value (signed bit set) is default "empty" value in idHashMap for signed integers
 template<class Key> struct idHashDefaultEmpty<Key, std::enable_if_t<
-	(std::is_integral<Key>::value || std::is_pointer<Key>::value)
+	(std::is_integral<Key>::value && std::is_signed<Key>::value)
+>> {
+	static Key Get() { return Key(-1) << (8 * sizeof(Key) - 1); }
+};
+//-1 (all bits set) is default "empty" value in idHashMap for unsigned integers (and pointers)
+template<class Key> struct idHashDefaultEmpty<Key, std::enable_if_t<
+	(std::is_integral<Key>::value && !std::is_signed<Key>::value || std::is_pointer<Key>::value)
 >> {
 	static Key Get() { return Key(-1); }
 };
@@ -144,19 +158,21 @@ public:
 		shift = src.shift;
 		hashFunc = src.hashFunc;
 		equalFunc = src.equalFunc;
-		table = new Elem[size];
-		for (int i = 0; i < size; i++)
-			table[i] = src.table[i];
+		if (size > 0) {
+			table = new Elem[size];
+			for (int i = 0; i < size; i++)
+				table[i] = src.table[i];
+		}
 	}
 	void Swap(idHashMap &other) {
-		idSwap(table, src.table);
-		idSwap(size, src.size);
-		idSwap(count, src.count);
-		idSwap(empty, src.empty);
-		idSwap(maxLoad, src.maxLoad);
-		idSwap(shift, src.shift);
-		idSwap(hashFunc, src.hashFunc);
-		idSwap(equalFunc, src.equalFunc);
+		idSwap(table, other.table);
+		idSwap(size, other.size);
+		idSwap(count, other.count);
+		idSwap(empty, other.empty);
+		idSwap(maxLoad, other.maxLoad);
+		idSwap(shift, other.shift);
+		idSwap(hashFunc, other.hashFunc);
+		idSwap(equalFunc, other.equalFunc);
 	}
 
 	//set special "empty" value (frees all resources)
@@ -169,7 +185,7 @@ public:
 	void SetLoadFactor(float ratio) {
 		if (table)
 			ClearFree();
-		loadFactor = idMath::ClampInt(1, 255, ratio * 256);
+		maxLoad = idMath::ClampInt(1, 255, ratio * 256);
 	}
 	//set hash function and equality --- in case they contain some data (frees all resources)
 	void SetFunctions(const HashFunction &hf, const EqualFunction &eqf = EqualFunction()) {
@@ -183,7 +199,7 @@ public:
 		if (!cellsNumber)
 			number = (uint64(number) << 8) / maxLoad;
 		number++;	//ensure one excessive empty cell
-		int bits = 0;
+		int bits = 1;
 		while ((1 << bits) < number)
 			bits++;
 		int wantedShift = 32 - bits;
@@ -337,6 +353,7 @@ public:
 
 private:
 	void Reallocate(int wantedShift) {
+		assert(wantedShift >= 1 && wantedShift <= 31);
 		byte oldShift = wantedShift;
 		int oldSize = (1 << (32 - wantedShift));
 		Elem *oldTable = new Elem[oldSize];
