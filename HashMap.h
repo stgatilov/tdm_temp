@@ -111,7 +111,7 @@ template<class Key> struct idHashDefaultEmpty<Key, std::enable_if_t<
 template<
 	class Key,
 	class Value,
-	class HashFunction = idHashFunction<Key, Value>,
+	class HashFunction = idHashFunction<Key>,
 	class EqualFunction = idEquality
 >
 class idHashMap {
@@ -192,6 +192,7 @@ public:
 	}
 
 	void Clear() {
+		count = 0;
 		for (int i = 0; i < size; i++)
 			table[i].key = empty;
 	}
@@ -258,12 +259,15 @@ public:
 	//[low-level] commits addition of new element at specified call
 	//before calling this, you must find empty cell using FindCell, and write new key/value into it
 	//may resize the whole table if load factor exceeds limit
-	void CellAdded(Elem &elem) {
+	bool CellAdded(Elem &elem) {
 		assert(equalFunc(elem.key, empty) == false);
 		count++;
-		if (count > ((uint64(size) * maxLoad) >> 8))
+		if (count > ((uint64(size) * maxLoad) >> 8)) {
 			Reallocate(shift - 1);
+			return true;
+		}
 		HASHMAP_STATINC(CellAdded);
+		return false;
 	}
 
 	//returns pointer to the element with given key, or NULL if not present
@@ -290,17 +294,15 @@ public:
 		if (IsEmpty(cell)) {
 			cell.key = key;
 			cell.value = Value();
-			CellAdded(cell);
+			if (CellAdded(cell))	//search again if table was reallocated
+				return FindCell(key).value;
 		}
 		return cell.value;
 	}
 	//assign specified value for the given key, overwrite value if already present
 	//returns true if key was NOT present
-	//address of modified element can also be written to *ppos
-	bool Set(const Key &key, const Value &value, Elem* *ppos = nullptr) {
+	bool Set(const Key &key, const Value &value) {
 		Elem &cell = FindCell(key);
-		if (ppos)
-			*ppos = &cell;
 		if (IsEmpty(cell)) {
 			cell.key = key;
 			cell.value = value;
@@ -312,11 +314,8 @@ public:
 	}
 	//assign specified value for the given key, but only if such key is not present yet
 	//returns true if key was NOT present
-	//address of modified element can also be written to *ppos
-	bool AddIfNew(const Key &key, const Value &value, Elem* *ppos = nullptr) {
+	bool AddIfNew(const Key &key, const Value &value) {
 		Elem &cell = FindCell(key);
-		if (ppos)
-			*ppos = &cell;
 		if (IsEmpty(cell)) {
 			cell.key = key;
 			cell.value = value;
@@ -328,11 +327,8 @@ public:
 
 	//remove element with specified key if it exists
 	//returns true if such element was removed
-	//its address can also be stored to *ppos
-	bool Remove(const Key &key, Elem* *ppos = nullptr) {
+	bool Remove(const Key &key) {
 		Elem &cell = FindCell(key);
-		if (ppos)
-			*ppos = &cell;
 		if (IsEmpty(cell))
 			return false;
 		CellRemove(cell);
